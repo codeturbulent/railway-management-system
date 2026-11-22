@@ -1,0 +1,13 @@
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Operating System files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Temporary & Log files
+*.log
+*.tmp

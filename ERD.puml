@@ -1,0 +1,108 @@
+@startuml Railway_Management_System_ERD
+!theme plain
+skinparam linetype ortho
+skinparam roundcorner 5
+skinparam class {
+    BackgroundColor White
+    ArrowColor #2C3E50
+    BorderColor #2C3E50
+}
+
+entity "STATION" as station {
+    * **StationID** : INT <<PK>>
+    --
+    * StationCode : VARCHAR(10) <<UQ>>
+    * StationName : VARCHAR(100)
+    * City : VARCHAR(50)
+    * State : VARCHAR(50)
+    * PlatformsCount : INT
+}
+
+entity "TRAIN" as train {
+    * **TrainID** : INT <<PK>>
+    --
+    * TrainNumber : VARCHAR(10) <<UQ>>
+    * TrainName : VARCHAR(100)
+    * TrainType : VARCHAR(30)
+    * SourceStationID : INT <<FK>>
+    * DestinationStationID : INT <<FK>>
+    * TotalDistanceKm : INT
+}
+
+entity "TRAIN_SCHEDULE" as schedule {
+    * **ScheduleID** : INT <<PK>>
+    --
+    * TrainID : INT <<FK>>
+    * StationID : INT <<FK>>
+    * StopNumber : INT
+    ArrivalTime : TIME
+    DepartureTime : TIME
+    * DistanceFromSourceKm : INT
+}
+
+entity "COACH" as coach {
+    * **CoachID** : INT <<PK>>
+    --
+    * TrainID : INT <<FK>>
+    * CoachNumber : VARCHAR(10)
+    * CoachType : VARCHAR(30)
+    * TotalSeats : INT
+}
+
+entity "PASSENGER" as passenger {
+    * **PassengerID** : INT <<PK>>
+    --
+    * FirstName : VARCHAR(50)
+    * LastName : VARCHAR(50)
+    * Gender : CHAR(1)
+    * Age : INT
+    * PhoneNumber : VARCHAR(15) <<UQ>>
+    * Email : VARCHAR(100) <<UQ>>
+    * City : VARCHAR(50)
+}
+
+entity "BOOKING" as booking {
+    * **BookingID** : INT <<PK>>
+    --
+    * PNR : VARCHAR(10) <<UQ>>
+    * PassengerID : INT <<FK>>
+    * TrainID : INT <<FK>>
+    * JourneyDate : DATE
+    * BookingDate : DATE
+    * TotalFare : DECIMAL(10,2)
+    * BookingStatus : VARCHAR(20)
+}
+
+entity "SEAT_RESERVATION" as seat {
+    * **ReservationID** : INT <<PK>>
+    --
+    * BookingID : INT <<FK>>
+    * CoachID : INT <<FK>>
+    * SeatNumber : INT
+    * BerthType : VARCHAR(20)
+    * Fare : DECIMAL(10,2)
+}
+
+entity "PAYMENT" as payment {
+    * **PaymentID** : INT <<PK>>
+    --
+    * BookingID : INT <<FK>>
+    * PaymentDate : DATE
+    * Amount : DECIMAL(10,2)
+    * PaymentMethod : VARCHAR(30)
+    * PaymentStatus : VARCHAR(20)
+}
+
+' Relationships & Cardinalities
+station ||--o{ train : "originates (Source)"
+station ||--o{ train : "terminates (Destination)"
+station ||--o{ schedule : "hosts intermediate stop"
+train ||--|{ schedule : "follows stops"
+train ||--|{ coach : "consists of"
+train ||--o{ booking : "booked for"
+passenger ||--o{ booking : "makes"
+booking ||--|{ seat : "contains"
+coach ||--o{ seat : "allocates seats from"
+booking ||--o{ payment : "settled via"
+
+@enduml
