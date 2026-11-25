@@ -120,14 +120,11 @@ $defaultDate = date('Y-m-d', strtotime('+1 day'));
 <body>
     <header class="topbar">
         <div class="topbar-brand">
-            <span class="topbar-logo">🚆</span>
-            <strong><?= e(RMS_APP_NAME) ?></strong>
+            <?= e(RMS_APP_NAME) ?>
         </div>
         <div class="topbar-user">
-            <span class="user-pill">
-                <?= e($user['full_name']) ?>
-                <span class="role-tag"><?= e($user['role']) ?></span>
-            </span>
+            <span class="user-name"><?= e($user['full_name']) ?></span>
+            <span class="role-tag">(<?= e($user['role']) ?>)</span>
             <a href="logout.php" class="btn-logout">Logout</a>
         </div>
     </header>

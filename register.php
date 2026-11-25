@@ -55,7 +55,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <body class="auth-page">
     <main class="auth-card auth-card-wide">
         <div class="auth-header">
-            <div class="auth-logo">🚆</div>
             <h1>Create Account</h1>
             <p class="auth-subtitle"><?= e(RMS_APP_NAME) ?></p>
         </div>

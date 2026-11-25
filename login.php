@@ -71,7 +71,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <body class="auth-page">
     <main class="auth-card">
         <div class="auth-header">
-            <div class="auth-logo">🚆</div>
             <h1><?= e(RMS_APP_NAME) ?></h1>
             <p class="auth-subtitle">Sign in to continue</p>
         </div>
