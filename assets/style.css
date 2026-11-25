@@ -1,23 +1,24 @@
 /* ============================================================================
-   Railway Management System (RMS) — Flat Minimal Stylesheet
+   Railway Management System (RMS) — Simple Flat Dark Theme
    ============================================================================ */
 
 :root {
-    --bg: #f4f5f7;
-    --surface: #ffffff;
-    --surface-muted: #f9fafb;
-    --header-bg: #1e293b;
-    --primary: #1e293b;
-    --primary-hover: #334155;
-    --text: #111827;
-    --text-muted: #6b7280;
-    --border: #d1d5db;
-    --success-bg: #ecfdf5;
-    --success-text: #065f46;
-    --warning-bg: #fffbeb;
-    --warning-text: #92400e;
-    --danger-bg: #fef2f2;
-    --danger-text: #991b1b;
+    color-scheme: dark;
+    --bg: #0f1115;
+    --surface: #171a21;
+    --surface-muted: #1f242e;
+    --header-bg: #12151b;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --text: #e5e7eb;
+    --text-muted: #9ca3af;
+    --border: #2a303c;
+    --success-bg: #064e3b;
+    --success-text: #a7f3d0;
+    --warning-bg: #451a03;
+    --warning-text: #fde68a;
+    --danger-bg: #450a0a;
+    --danger-text: #fecaca;
 }
 
 * {
@@ -35,7 +36,7 @@ body {
 }
 
 a {
-    color: var(--primary);
+    color: #93c5fd;
     text-decoration: underline;
     font-weight: 500;
 }
@@ -112,7 +113,7 @@ select {
     border-radius: 4px;
     font-size: 0.9rem;
     color: var(--text);
-    background: var(--surface);
+    background: var(--bg);
 }
 
 input:focus,
@@ -184,13 +185,13 @@ select:focus {
 }
 
 .btn-outline {
-    background: var(--surface);
+    background: var(--surface-muted);
     border-color: var(--border);
     color: var(--text);
 }
 
 .btn-outline:hover {
-    background: var(--surface-muted);
+    background: #282f3c;
 }
 
 .btn-sm {
@@ -210,13 +211,13 @@ select:focus {
 .alert-error {
     background: var(--danger-bg);
     color: var(--danger-text);
-    border-color: #fecaca;
+    border-color: #7f1d1d;
 }
 
 .alert-success {
     background: var(--success-bg);
     color: var(--success-text);
-    border-color: #a7f3d0;
+    border-color: #065f46;
 }
 
 .demo-strip {
@@ -243,17 +244,17 @@ select:focus {
     color: var(--text-muted);
 }
 
-/* ---------- Flat Dashboard ---------- */
+/* ---------- Flat Dark Dashboard ---------- */
 .topbar {
     background: var(--header-bg);
-    color: #ffffff;
+    color: var(--text);
     padding: 12px 24px;
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 12px;
     flex-wrap: wrap;
-    border-bottom: 1px solid #0f172a;
+    border-bottom: 1px solid var(--border);
 }
 
 .topbar-brand {
@@ -269,18 +270,18 @@ select:focus {
 }
 
 .user-name {
-    color: #e2e8f0;
+    color: var(--text);
 }
 
 .role-tag {
-    color: #cbd5e1;
+    color: var(--text-muted);
     font-size: 0.8rem;
 }
 
 .btn-logout {
-    background: transparent;
-    color: #ffffff;
-    border: 1px solid #475569;
+    background: var(--surface-muted);
+    color: var(--text);
+    border: 1px solid var(--border);
     padding: 5px 11px;
     border-radius: 4px;
     font-size: 0.82rem;
@@ -288,7 +289,7 @@ select:focus {
 }
 
 .btn-logout:hover {
-    background: #334155;
+    background: #282f3c;
     text-decoration: none;
 }
 
@@ -344,7 +345,7 @@ td {
 
 th {
     background: var(--surface-muted);
-    color: var(--text);
+    color: var(--text-muted);
     font-size: 0.78rem;
     font-weight: 600;
     text-transform: uppercase;
