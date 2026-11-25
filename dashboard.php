@@ -1,9 +1,6 @@
 <?php
 /**
- * Railway Management System (RMS) — Authenticated Dashboard
- *
- * Displays verified user session info, KPI summary, PNR lookup,
- * passenger/admin bookings, train schedules, and station directory.
+ * Railway Management System (RMS) — Minimal Booking & Data View
  */
 
 declare(strict_types=1);
@@ -14,306 +11,194 @@ $user = require_login();
 $pdo = get_db();
 $isAdmin = ($user['role'] === 'Admin');
 
-/**
- * Maps booking or payment status text to a CSS badge class.
- */
-function status_badge_class(string $status): string
-{
-    return match ($status) {
-        'Confirmed', 'Success' => 'badge-success',
-        'Waiting', 'Refunded' => 'badge-warning',
-        'Cancelled', 'Failed' => 'badge-danger',
-        default => 'badge-info',
-    };
-}
+$fareByClass = [
+    'Sleeper' => 650.00,
+    'AC 3-Tier' => 1650.00,
+    'AC 2-Tier' => 2450.00,
+    'AC 1-Tier' => 3850.00,
+];
 
-// 1. KPI Summary
-$stationCount = (int) $pdo->query('SELECT COUNT(*) FROM Station')->fetchColumn();
-$trainCount = (int) $pdo->query('SELECT COUNT(*) FROM Train')->fetchColumn();
+$bookingError = null;
+$bookingSuccess = null;
 
-if ($isAdmin) {
-    $kpiBookings = (int) $pdo->query('SELECT COUNT(*) FROM Booking')->fetchColumn();
-    $kpiConfirmed = (int) $pdo->query("SELECT COUNT(*) FROM Booking WHERE BookingStatus = 'Confirmed'")->fetchColumn();
-    $kpiAmount = (float) $pdo->query("SELECT COALESCE(SUM(TotalFare), 0) FROM Booking WHERE BookingStatus = 'Confirmed'")->fetchColumn();
-} else {
-    $pid = (int) $user['passenger_id'];
-    $stmt = $pdo->prepare('
-        SELECT
-            COUNT(*) AS total_bookings,
-            COALESCE(SUM(CASE WHEN BookingStatus = \'Confirmed\' THEN 1 ELSE 0 END), 0) AS confirmed_bookings,
-            COALESCE(SUM(CASE WHEN BookingStatus != \'Cancelled\' THEN TotalFare ELSE 0 END), 0) AS total_spent
-        FROM Booking
-        WHERE PassengerID = ?
-    ');
-    $stmt->execute([$pid]);
-    $stats = $stmt->fetch() ?: [];
-    $kpiBookings = (int) ($stats['total_bookings'] ?? 0);
-    $kpiConfirmed = (int) ($stats['confirmed_bookings'] ?? 0);
-    $kpiAmount = (float) ($stats['total_spent'] ?? 0);
-}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'book') {
+    $token = $_POST['csrf_token'] ?? null;
+    if (!verify_csrf_token(is_string($token) ? $token : null)) {
+        $bookingError = 'Session expired. Please try again.';
+    } else {
+        $trainId = (int) ($_POST['train_id'] ?? 0);
+        $journeyDate = trim((string) ($_POST['journey_date'] ?? ''));
+        $coachClass = (string) ($_POST['coach_class'] ?? '');
+        $passengerId = $isAdmin
+            ? (int) ($_POST['passenger_id'] ?? 0)
+            : (int) ($user['passenger_id'] ?? 0);
 
-// 2. PNR Lookup
-$pnrQuery = strtoupper(trim((string) ($_GET['pnr'] ?? '')));
-$pnrResult = null;
-$pnrNotFound = false;
+        $trainCheck = $pdo->prepare('SELECT TrainID FROM Train WHERE TrainID = ?');
+        $trainCheck->execute([$trainId]);
 
-if ($pnrQuery !== '') {
-    $pnrStmt = $pdo->prepare('
-        SELECT
-            b.PNR, b.JourneyDate, b.BookingDate, b.TotalFare, b.BookingStatus,
-            p.FirstName, p.LastName, p.City AS PassengerCity,
-            t.TrainNumber, t.TrainName, t.TrainType,
-            s1.StationCode AS SrcCode, s1.StationName AS SrcName,
-            s2.StationCode AS DstCode, s2.StationName AS DstName,
-            c.CoachNumber, c.CoachType, sr.SeatNumber, sr.BerthType,
-            pay.PaymentMethod, pay.PaymentStatus
-        FROM Booking b
-        JOIN Passenger p ON b.PassengerID = p.PassengerID
-        JOIN Train t ON b.TrainID = t.TrainID
-        JOIN Station s1 ON t.SourceStationID = s1.StationID
-        JOIN Station s2 ON t.DestinationStationID = s2.StationID
-        LEFT JOIN SeatReservation sr ON b.BookingID = sr.BookingID
-        LEFT JOIN Coach c ON sr.CoachID = c.CoachID
-        LEFT JOIN Payment pay ON b.BookingID = pay.BookingID
-        WHERE UPPER(b.PNR) = ?
-        LIMIT 1
-    ');
-    $pnrStmt->execute([$pnrQuery]);
-    $pnrResult = $pnrStmt->fetch() ?: null;
-    if ($pnrResult === null) {
-        $pnrNotFound = true;
+        $passCheck = $pdo->prepare('SELECT PassengerID FROM Passenger WHERE PassengerID = ?');
+        $passCheck->execute([$passengerId]);
+
+        if (!$trainCheck->fetchColumn()) {
+            $bookingError = 'Please select a valid train.';
+        } elseif (!$passCheck->fetchColumn()) {
+            $bookingError = 'Please select a valid passenger.';
+        } elseif (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $journeyDate)) {
+            $bookingError = 'Please choose a valid journey date.';
+        } elseif (!isset($fareByClass[$coachClass])) {
+            $bookingError = 'Please select a valid travel class.';
+        } else {
+            $pdo->beginTransaction();
+            try {
+                $nextId = (int) $pdo->query('SELECT COALESCE(MAX(BookingID), 1000) + 1 FROM Booking')->fetchColumn();
+                $pnr = 'PNR' . (812300 + ($nextId - 1000));
+                $fare = $fareByClass[$coachClass];
+
+                $ins = $pdo->prepare('
+                    INSERT INTO Booking (BookingID, PNR, PassengerID, TrainID, JourneyDate, BookingDate, TotalFare, BookingStatus)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ');
+                $ins->execute([$nextId, $pnr, $passengerId, $trainId, $journeyDate, date('Y-m-d'), $fare, 'Confirmed']);
+                $pdo->commit();
+
+                $bookingSuccess = "Booking confirmed! PNR: {$pnr}";
+            } catch (Throwable $ex) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                $bookingError = 'Could not create booking. Please try again.';
+            }
+        }
     }
 }
 
-// 3. Bookings List (All for Admin, Personal for Passenger)
+$trains = $pdo->query('
+    SELECT
+        t.TrainID, t.TrainNumber, t.TrainName, t.TrainType, t.TotalDistanceKm,
+        s1.StationCode AS SrcCode, s2.StationCode AS DstCode
+    FROM Train t
+    JOIN Station s1 ON t.SourceStationID = s1.StationID
+    JOIN Station s2 ON t.DestinationStationID = s2.StationID
+    ORDER BY t.TrainNumber ASC
+')->fetchAll();
+
+$passengers = $isAdmin
+    ? $pdo->query('SELECT PassengerID, FirstName, LastName, Email FROM Passenger ORDER BY FirstName, LastName')->fetchAll()
+    : [];
+
 $bookingsSql = '
     SELECT
         b.PNR, b.JourneyDate, b.TotalFare, b.BookingStatus,
         p.FirstName, p.LastName,
         t.TrainNumber, t.TrainName,
-        s1.StationCode AS SrcCode, s2.StationCode AS DstCode,
-        c.CoachNumber, sr.SeatNumber, sr.BerthType,
-        pay.PaymentMethod, pay.PaymentStatus
+        s1.StationCode AS SrcCode, s2.StationCode AS DstCode
     FROM Booking b
     JOIN Passenger p ON b.PassengerID = p.PassengerID
     JOIN Train t ON b.TrainID = t.TrainID
     JOIN Station s1 ON t.SourceStationID = s1.StationID
     JOIN Station s2 ON t.DestinationStationID = s2.StationID
-    LEFT JOIN SeatReservation sr ON b.BookingID = sr.BookingID
-    LEFT JOIN Coach c ON sr.CoachID = c.CoachID
-    LEFT JOIN Payment pay ON b.BookingID = pay.BookingID
 ';
 
 if ($isAdmin) {
-    $bookings = $pdo->query($bookingsSql . ' ORDER BY b.JourneyDate ASC, b.BookingID ASC')->fetchAll();
+    $bookings = $pdo->query($bookingsSql . ' ORDER BY b.BookingID DESC')->fetchAll();
 } else {
-    $bStmt = $pdo->prepare($bookingsSql . ' WHERE b.PassengerID = ? ORDER BY b.JourneyDate ASC, b.BookingID ASC');
+    $bStmt = $pdo->prepare($bookingsSql . ' WHERE b.PassengerID = ? ORDER BY b.BookingID DESC');
     $bStmt->execute([(int) $user['passenger_id']]);
     $bookings = $bStmt->fetchAll();
 }
 
-// 4. Trains & Schedules Directory (supports search filter ?q=...)
-$trainSearch = trim((string) ($_GET['q'] ?? ''));
-$trainParams = [];
-$trainWhere = '';
-
-if ($trainSearch !== '') {
-    $trainWhere = ' WHERE t.TrainNumber LIKE ? OR t.TrainName LIKE ? OR s1.City LIKE ? OR s2.City LIKE ? ';
-    $like = '%' . $trainSearch . '%';
-    $trainParams = [$like, $like, $like, $like];
-}
-
-$tStmt = $pdo->prepare("
-    SELECT
-        t.TrainID, t.TrainNumber, t.TrainName, t.TrainType, t.TotalDistanceKm,
-        s1.StationCode AS SrcCode, s1.StationName AS SrcName,
-        s2.StationCode AS DstCode, s2.StationName AS DstName
-    FROM Train t
-    JOIN Station s1 ON t.SourceStationID = s1.StationID
-    JOIN Station s2 ON t.DestinationStationID = s2.StationID
-    {$trainWhere}
-    ORDER BY t.TrainNumber ASC
-");
-$tStmt->execute($trainParams);
-$trains = $tStmt->fetchAll();
-
-// Map TrainID => ordered schedule stops
-$scheduleRows = $pdo->query('
-    SELECT ts.TrainID, ts.StopNumber, ts.ArrivalTime, ts.DepartureTime, s.StationCode, s.City
-    FROM TrainSchedule ts
-    JOIN Station s ON ts.StationID = s.StationID
-    ORDER BY ts.TrainID, ts.StopNumber
-')->fetchAll();
-
-$schedulesByTrain = [];
-foreach ($scheduleRows as $stop) {
-    $schedulesByTrain[(int) $stop['TrainID']][] = $stop;
-}
-
-// 5. Stations Network
-$stations = $pdo->query('
-    SELECT StationCode, StationName, City, State, PlatformsCount
-    FROM Station
-    ORDER BY StationID ASC
-')->fetchAll();
+$defaultDate = date('Y-m-d', strtotime('+1 day'));
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard — <?= e(RMS_APP_NAME) ?></title>
+    <title><?= e(RMS_APP_NAME) ?></title>
     <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
     <header class="topbar">
         <div class="topbar-brand">
-            <div class="topbar-logo">🚆</div>
-            <div>
-                <h1><?= e(RMS_APP_NAME) ?></h1>
-                <span><?= e(RMS_APP_TAGLINE) ?></span>
-            </div>
+            <span class="topbar-logo">🚆</span>
+            <strong><?= e(RMS_APP_NAME) ?></strong>
         </div>
         <div class="topbar-user">
-            <div class="user-pill">
-                <span><?= e($user['full_name']) ?></span>
+            <span class="user-pill">
+                <?= e($user['full_name']) ?>
                 <span class="role-tag"><?= e($user['role']) ?></span>
-            </div>
+            </span>
             <a href="logout.php" class="btn-logout">Logout</a>
         </div>
     </header>
 
     <main class="container">
-        <section class="welcome-banner">
-            <div>
-                <h2>Welcome back, <?= e($user['full_name']) ?></h2>
-                <div class="welcome-meta">
-                    <span><strong>Email:</strong> <?= e($user['email']) ?></span>
-                    <span><strong>City:</strong> <?= e($user['city']) ?></span>
-                    <?php if (!empty($user['phone'])): ?>
-                        <span><strong>Phone:</strong> <?= e($user['phone']) ?></span>
-                    <?php endif; ?>
-                    <span><strong>Signed in:</strong> <?= e($user['logged_in_at']) ?></span>
-                </div>
-            </div>
-            <div class="verified-pill">✓ Login Verified (Active Session)</div>
-        </section>
-
-        <section class="kpi-grid">
-            <article class="kpi-card">
-                <div class="kpi-label"><?= $isAdmin ? 'Total Bookings' : 'My Bookings' ?></div>
-                <div class="kpi-value"><?= $kpiBookings ?></div>
-                <div class="kpi-sub"><?= $kpiConfirmed ?> confirmed ticket<?= $kpiConfirmed === 1 ? '' : 's' ?></div>
-            </article>
-            <article class="kpi-card">
-                <div class="kpi-label"><?= $isAdmin ? 'Confirmed Revenue' : 'Active Fare Total' ?></div>
-                <div class="kpi-value">₹<?= number_format($kpiAmount, 2) ?></div>
-                <div class="kpi-sub"><?= $isAdmin ? 'Across confirmed bookings' : 'Excludes cancelled tickets' ?></div>
-            </article>
-            <article class="kpi-card">
-                <div class="kpi-label">Active Trains</div>
-                <div class="kpi-value"><?= $trainCount ?></div>
-                <div class="kpi-sub">Rajdhani, Superfast &amp; Mail</div>
-            </article>
-            <article class="kpi-card">
-                <div class="kpi-label">Railway Stations</div>
-                <div class="kpi-value"><?= $stationCount ?></div>
-                <div class="kpi-sub">Connected nationwide</div>
-            </article>
-        </section>
-
         <section class="panel">
-            <div class="panel-header">
-                <div>
-                    <h3>Quick PNR Status Lookup</h3>
-                    <p class="panel-sub">Verify any reservation directly from the database.</p>
-                </div>
-            </div>
+            <h2 class="panel-title">Book Ticket</h2>
 
-            <form method="GET" action="dashboard.php" class="pnr-form">
-                <input
-                    type="text"
-                    name="pnr"
-                    value="<?= e($pnrQuery) ?>"
-                    placeholder="Enter PNR (e.g. PNR812301)"
-                    maxlength="12"
-                >
-                <button type="submit" class="btn btn-accent">Check PNR</button>
-                <?php if ($pnrQuery !== ''): ?>
-                    <a href="dashboard.php" class="btn btn-outline">Clear</a>
-                <?php endif; ?>
-            </form>
-
-            <div class="pnr-chips">
-                <span>Try sample PNRs:</span>
-                <?php foreach (['PNR812301', 'PNR812305', 'PNR812310', 'PNR812312'] as $samplePnr): ?>
-                    <a class="pnr-chip" href="dashboard.php?pnr=<?= e($samplePnr) ?>"><?= e($samplePnr) ?></a>
-                <?php endforeach; ?>
-            </div>
-
-            <?php if ($pnrNotFound): ?>
-                <div class="alert alert-error" style="margin-top: 14px; margin-bottom: 0;">
-                    No booking record found for PNR <strong><?= e($pnrQuery) ?></strong>.
-                </div>
-            <?php elseif ($pnrResult !== null): ?>
-                <div class="pnr-result">
-                    <div class="pnr-field">
-                        <span>PNR Number</span>
-                        <strong><?= e($pnrResult['PNR']) ?></strong>
-                    </div>
-                    <div class="pnr-field">
-                        <span>Passenger</span>
-                        <strong><?= e($pnrResult['FirstName'] . ' ' . $pnrResult['LastName']) ?></strong>
-                    </div>
-                    <div class="pnr-field">
-                        <span>Train &amp; Route</span>
-                        <strong><?= e($pnrResult['TrainNumber'] . ' ' . $pnrResult['TrainName']) ?> (<?= e($pnrResult['SrcCode']) ?> → <?= e($pnrResult['DstCode']) ?>)</strong>
-                    </div>
-                    <div class="pnr-field">
-                        <span>Journey Date</span>
-                        <strong><?= e($pnrResult['JourneyDate']) ?></strong>
-                    </div>
-                    <div class="pnr-field">
-                        <span>Coach / Seat</span>
-                        <strong>
-                            <?php if (!empty($pnrResult['CoachNumber'])): ?>
-                                <?= e($pnrResult['CoachNumber']) ?> • Seat <?= e((string) $pnrResult['SeatNumber']) ?> (<?= e($pnrResult['BerthType']) ?>)
-                            <?php else: ?>
-                                Not Assigned
-                            <?php endif; ?>
-                        </strong>
-                    </div>
-                    <div class="pnr-field">
-                        <span>Booking &amp; Payment</span>
-                        <strong>
-                            <span class="badge <?= e(status_badge_class($pnrResult['BookingStatus'])) ?>">
-                                <?= e($pnrResult['BookingStatus']) ?>
-                            </span>
-                            <?php if (!empty($pnrResult['PaymentStatus'])): ?>
-                                <span class="badge <?= e(status_badge_class($pnrResult['PaymentStatus'])) ?>">
-                                    <?= e($pnrResult['PaymentMethod'] . ': ' . $pnrResult['PaymentStatus']) ?>
-                                </span>
-                            <?php endif; ?>
-                        </strong>
-                    </div>
-                </div>
+            <?php if ($bookingError !== null): ?>
+                <div class="alert alert-error" role="alert"><?= e($bookingError) ?></div>
             <?php endif; ?>
+
+            <?php if ($bookingSuccess !== null): ?>
+                <div class="alert alert-success" role="status"><?= e($bookingSuccess) ?></div>
+            <?php endif; ?>
+
+            <form method="POST" action="dashboard.php" class="booking-form">
+                <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
+                <input type="hidden" name="action" value="book">
+
+                <?php if ($isAdmin): ?>
+                    <div class="form-group">
+                        <label for="passenger_id">Passenger</label>
+                        <select id="passenger_id" name="passenger_id" required>
+                            <?php foreach ($passengers as $p): ?>
+                                <option value="<?= (int) $p['PassengerID'] ?>">
+                                    <?= e($p['FirstName'] . ' ' . $p['LastName'] . ' (' . $p['Email'] . ')') ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                <?php endif; ?>
+
+                <div class="form-group">
+                    <label for="train_id">Train</label>
+                    <select id="train_id" name="train_id" required>
+                        <?php foreach ($trains as $t): ?>
+                            <option value="<?= (int) $t['TrainID'] ?>">
+                                <?= e($t['TrainNumber'] . ' - ' . $t['TrainName'] . ' (' . $t['SrcCode'] . ' → ' . $t['DstCode'] . ')') ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="journey_date">Date</label>
+                    <input type="date" id="journey_date" name="journey_date" value="<?= e($defaultDate) ?>" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="coach_class">Class</label>
+                    <select id="coach_class" name="coach_class" required>
+                        <?php foreach ($fareByClass as $class => $fare): ?>
+                            <option value="<?= e($class) ?>">
+                                <?= e($class) ?> (₹<?= number_format($fare, 0) ?>)
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div class="form-group form-submit">
+                    <button type="submit" class="btn btn-primary">Book</button>
+                </div>
+            </form>
         </section>
 
         <section class="panel">
-            <div class="panel-header">
-                <div>
-                    <h3><?= $isAdmin ? 'All System Bookings' : 'My Ticket Bookings' ?></h3>
-                    <p class="panel-sub">
-                        <?= $isAdmin ? 'Complete reservation ledger across all passengers.' : 'Reservations linked to your passenger account.' ?>
-                    </p>
-                </div>
-            </div>
+            <h2 class="panel-title"><?= $isAdmin ? 'All Bookings' : 'My Bookings' ?></h2>
 
             <?php if (empty($bookings)): ?>
-                <div class="empty-state">
-                    No bookings found for your account yet. Use the PNR Lookup or browse Trains &amp; Schedules below.
-                </div>
+                <p class="empty-state">No bookings yet.</p>
             <?php else: ?>
                 <div class="table-wrap">
                     <table>
@@ -325,45 +210,30 @@ $stations = $pdo->query('
                                 <?php endif; ?>
                                 <th>Train</th>
                                 <th>Route</th>
-                                <th>Journey Date</th>
-                                <th>Coach / Seat</th>
+                                <th>Date</th>
                                 <th>Fare</th>
-                                <th>Booking Status</th>
-                                <th>Payment</th>
+                                <th>Status</th>
                             </tr>
                         </thead>
                         <tbody>
                             <?php foreach ($bookings as $b): ?>
+                                <?php
+                                    $badgeClass = match ($b['BookingStatus']) {
+                                        'Confirmed' => 'badge-success',
+                                        'Waiting' => 'badge-warning',
+                                        default => 'badge-danger',
+                                    };
+                                ?>
                                 <tr>
                                     <td><strong><?= e($b['PNR']) ?></strong></td>
                                     <?php if ($isAdmin): ?>
                                         <td><?= e($b['FirstName'] . ' ' . $b['LastName']) ?></td>
                                     <?php endif; ?>
-                                    <td><?= e($b['TrainNumber'] . ' — ' . $b['TrainName']) ?></td>
+                                    <td><?= e($b['TrainNumber'] . ' ' . $b['TrainName']) ?></td>
                                     <td><?= e($b['SrcCode']) ?> → <?= e($b['DstCode']) ?></td>
                                     <td><?= e($b['JourneyDate']) ?></td>
-                                    <td>
-                                        <?php if (!empty($b['CoachNumber'])): ?>
-                                            <?= e($b['CoachNumber']) ?> / #<?= e((string) $b['SeatNumber']) ?> (<?= e($b['BerthType']) ?>)
-                                        <?php else: ?>
-                                            —
-                                        <?php endif; ?>
-                                    </td>
                                     <td>₹<?= number_format((float) $b['TotalFare'], 2) ?></td>
-                                    <td>
-                                        <span class="badge <?= e(status_badge_class($b['BookingStatus'])) ?>">
-                                            <?= e($b['BookingStatus']) ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <?php if (!empty($b['PaymentStatus'])): ?>
-                                            <span class="badge <?= e(status_badge_class($b['PaymentStatus'])) ?>">
-                                                <?= e($b['PaymentMethod']) ?> (<?= e($b['PaymentStatus']) ?>)
-                                            </span>
-                                        <?php else: ?>
-                                            —
-                                        <?php endif; ?>
-                                    </td>
+                                    <td><span class="badge <?= e($badgeClass) ?>"><?= e($b['BookingStatus']) ?></span></td>
                                 </tr>
                             <?php endforeach; ?>
                         </tbody>
@@ -373,83 +243,30 @@ $stations = $pdo->query('
         </section>
 
         <section class="panel">
-            <div class="panel-header">
-                <div>
-                    <h3>Trains &amp; Route Schedules</h3>
-                    <p class="panel-sub">Live routes and intermediate stop timings from TrainSchedule.</p>
-                </div>
-                <form method="GET" action="dashboard.php" class="pnr-form">
-                    <input
-                        type="text"
-                        name="q"
-                        value="<?= e($trainSearch) ?>"
-                        placeholder="Search train or city..."
-                    >
-                    <button type="submit" class="btn btn-outline btn-sm">Filter</button>
-                    <?php if ($trainSearch !== ''): ?>
-                        <a href="dashboard.php" class="btn btn-outline btn-sm">Reset</a>
-                    <?php endif; ?>
-                </form>
-            </div>
-
-            <?php if (empty($trains)): ?>
-                <div class="empty-state">No trains matched "<?= e($trainSearch) ?>".</div>
-            <?php else: ?>
-                <div class="table-wrap">
-                    <table>
-                        <thead>
+            <h2 class="panel-title">Trains</h2>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Number</th>
+                            <th>Name</th>
+                            <th>Type</th>
+                            <th>Route</th>
+                            <th>Distance</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($trains as $t): ?>
                             <tr>
-                                <th>Train</th>
-                                <th>Type</th>
-                                <th>Origin → Destination</th>
-                                <th>Distance</th>
-                                <th>Stop Itinerary</th>
+                                <td><strong><?= e($t['TrainNumber']) ?></strong></td>
+                                <td><?= e($t['TrainName']) ?></td>
+                                <td><?= e($t['TrainType']) ?></td>
+                                <td><?= e($t['SrcCode']) ?> → <?= e($t['DstCode']) ?></td>
+                                <td><?= e((string) $t['TotalDistanceKm']) ?> km</td>
                             </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($trains as $t): ?>
-                                <?php $stops = $schedulesByTrain[(int) $t['TrainID']] ?? []; ?>
-                                <tr>
-                                    <td><strong><?= e($t['TrainNumber']) ?></strong><br><?= e($t['TrainName']) ?></td>
-                                    <td><span class="badge badge-info"><?= e($t['TrainType']) ?></span></td>
-                                    <td><?= e($t['SrcName']) ?> (<?= e($t['SrcCode']) ?>) → <?= e($t['DstName']) ?> (<?= e($t['DstCode']) ?>)</td>
-                                    <td><?= e((string) $t['TotalDistanceKm']) ?> km</td>
-                                    <td>
-                                        <div class="schedule-stops">
-                                            <?php foreach ($stops as $stop): ?>
-                                                <?php
-                                                    $timeLabel = $stop['DepartureTime'] ?: $stop['ArrivalTime'];
-                                                    $shortTime = $timeLabel ? substr((string) $timeLabel, 0, 5) : '--:--';
-                                                ?>
-                                                <span class="stop-pill">
-                                                    <?= e($stop['StationCode']) ?> (<?= e($shortTime) ?>)
-                                                </span>
-                                            <?php endforeach; ?>
-                                        </div>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-            <?php endif; ?>
-        </section>
-
-        <section class="panel">
-            <div class="panel-header">
-                <div>
-                    <h3>Station Network Directory</h3>
-                    <p class="panel-sub">All <?= count($stations) ?> railway terminals registered in the system.</p>
-                </div>
-            </div>
-            <div class="station-grid">
-                <?php foreach ($stations as $st): ?>
-                    <article class="station-card">
-                        <span class="station-code"><?= e($st['StationCode']) ?></span>
-                        <h4><?= e($st['StationName']) ?></h4>
-                        <p><?= e($st['City']) ?>, <?= e($st['State']) ?> • <?= e((string) $st['PlatformsCount']) ?> Platforms</p>
-                    </article>
-                <?php endforeach; ?>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
             </div>
         </section>
     </main>
